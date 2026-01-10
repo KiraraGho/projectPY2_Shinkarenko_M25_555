@@ -11,7 +11,8 @@ publish:
 	poetry publish --dry-run
 
 package-install:
-	python3 -m pip install dist/*.whl
+	pipx install dist/*.whl --force
 
 lint:
 	poetry run ruff check .
+
