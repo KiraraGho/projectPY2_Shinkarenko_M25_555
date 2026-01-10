@@ -19,3 +19,6 @@ build-backend = "poetry.core.masonry.api"
 packages = [
     { include = "src" },
 ]
+
+[tool.poetry.scripts]
+project = "src.primitive_db.main:main"
