@@ -1,4 +1,6 @@
+db_meta.json
+data/
+*.pyc
+__pycache__/
 .venv/
 dist/
-__pycache__/
-*.pyc
