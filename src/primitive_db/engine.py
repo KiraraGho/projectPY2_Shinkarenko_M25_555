@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import shlex
+from typing import Any
 
 import prompt
 from prettytable import PrettyTable
 
+from src.decorators import create_cacher
 from src.primitive_db.core import (
     create_table,
     delete,
@@ -22,20 +24,20 @@ from src.primitive_db.utils import (
     save_table_data,
 )
 
-# Файл, где лежат метаданные (список таблиц и их схема)
+# Файл, где хранятся метаданные (таблицы + схемы столбцов)
 META_FILEPATH = "db_meta.json"
 
 
 def print_help() -> None:
-    """Печатает справку по командам """
+    """Печатает справку по командам базы данных."""
     print("\n***Операции с данными***\n")
     print("Функции:")
     print(
-        '<command> insert into <имя_таблицы> values (<значение1>, <значение2>, ...)" ' \
-        '"- создать запись.'
+        "<command> insert into <имя_таблицы> values (<значение1>, <значение2>, ...) "
+        "- создать запись."
     )
     print(
-        "<command> select from <имя_таблицы> where <столбец> = <значение>" 
+        "<command> select from <имя_таблицы> where <столбец> = <значение> "
         "- прочитать записи по условию."
     )
     print("<command> select from <имя_таблицы> - прочитать все записи.")
@@ -44,7 +46,7 @@ def print_help() -> None:
         "where <столбец> = <значение> - обновить записи."
     )
     print(
-        "<command> delete from <имя_таблицы> where <столбец> = <значение>" 
+        "<command> delete from <имя_таблицы> where <столбец> = <значение> "
         "- удалить записи."
     )
     print("<command> info <имя_таблицы> - вывести информацию о таблице.\n")
@@ -62,26 +64,35 @@ def print_help() -> None:
     print("<command> help - справочная информация\n")
 
 
-def _get_schema(metadata: dict, table_name: str) -> list[dict[str, str]] | None:
-    """Достаёт схему таблицы из метаданных."""
+def _get_schema(
+        metadata: dict[str, Any],
+        table_name: str,
+        ) -> list[dict[str, str]] | None:
+    """Достаёт схему таблицы из метаданных. Если таблицы нет — None."""
     tables = metadata.get("tables", {})
     table = tables.get(table_name)
     if not table:
         return None
-    return table.get("columns", [])
+    schema = table.get("columns")
+    if not isinstance(schema, list):
+        return None
+    return schema
 
 
 def _get_col_type(schema: list[dict[str, str]], col_name: str) -> str | None:
-    """Возвращает тип столбца по имени (int/str/bool) или None."""
+    """Возвращает тип столбца по имени (int/str/bool), либо None."""
     for col in schema:
         if col.get("name") == col_name:
-            return col.get("type")
+            col_type = col.get("type")
+            if isinstance(col_type, str):
+                return col_type
     return None
 
 
 def _convert_value(raw: str, expected_type: str) -> object | None:
     """
     Приводит строковое значение к типу.
+    Упрощение по ТЗ: строковые значения всегда в кавычках.
     """
     if expected_type == "str":
         if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in {'"', "'"}:
@@ -106,6 +117,8 @@ def _convert_value(raw: str, expected_type: str) -> object | None:
 def _parse_values_list(values_part: str) -> list[str] | None:
     """
     Парсит часть values(...).
+    Пример: ("Sergei", 28, true)
+    Возвращает список токенов: ['"Sergei"', '28', 'true']
     """
     s = values_part.strip()
     if not (s.startswith("(") and s.endswith(")")):
@@ -128,7 +141,7 @@ def _parse_values_list(values_part: str) -> list[str] | None:
             buf.append(ch)
             continue
 
-        # Разделитель запятыми учитываем только если мы НЕ внутри кавычек
+        # Запятая — разделитель только вне кавычек
         if ch == "," and in_quotes is None:
             token = "".join(buf).strip()
             if token == "":
@@ -147,29 +160,28 @@ def _parse_values_list(values_part: str) -> list[str] | None:
     return result
 
 
-def _parse_assignment(expr_tokens: list[str]) -> tuple[str, str] | None:
+def _parse_assignment(tokens: list[str]) -> tuple[str, str] | None:
     """
-    Парсит присваивание вида: <col> = <value>
-    На вход получает токены (после shlex.split).
+    Парсит выражение вида: <col> = <value>
+    Поддерживает варианты:
+      age = 28        -> ["age", "=", "28"]
+      age=28          -> ["age=28"]
+      name="Sergei"   -> ['name="Sergei"']
     """
-    # Поддерживаем варианты:
-    #   age = 28        -> ["age","=","28"]
-    #   age=28          -> ["age=28"]
-    #   name="Sergei"   -> ['name="Sergei"']
-    if not expr_tokens:
+    if not tokens:
         return None
 
-    if len(expr_tokens) == 1 and "=" in expr_tokens[0]:
-        left, right = expr_tokens[0].split("=", 1)
+    if len(tokens) == 1 and "=" in tokens[0]:
+        left, right = tokens[0].split("=", 1)
         left = left.strip()
         right = right.strip()
         if not left or not right:
             return None
         return left, right
 
-    if len(expr_tokens) >= 3 and expr_tokens[1] == "=":
-        left = expr_tokens[0].strip()
-        right = expr_tokens[2].strip()
+    if len(tokens) >= 3 and tokens[1] == "=":
+        left = tokens[0].strip()
+        right = tokens[2].strip()
         if not left or not right:
             return None
         return left, right
@@ -177,13 +189,12 @@ def _parse_assignment(expr_tokens: list[str]) -> tuple[str, str] | None:
     return None
 
 
-def _print_rows(schema: list[dict[str, str]], rows: list[dict]) -> None:
+def _print_rows(schema: list[dict[str, str]], rows: list[dict[str, Any]]) -> None:
     """Печатает результат SELECT в виде таблицы PrettyTable."""
     if not rows:
         print("(записей нет)")
         return
 
-    # Порядок колонок берём из схемы
     headers = [c["name"] for c in schema]
     table = PrettyTable()
     table.field_names = headers
@@ -196,20 +207,20 @@ def _print_rows(schema: list[dict[str, str]], rows: list[dict]) -> None:
 
 def run() -> None:
     """
-    Главная функция запуска базы данных.
-    Содержит цикл чтения команд и вызов соответствующей логики.
+    Главная функция запуска БД.
+    Здесь основной цикл: читаем команду -> парсим -> выполняем.
     """
     print("***Операции с данными***")
     print_help()
 
+    # Кэш для select (замыкание). После изменений данных кэш сбрасываем.
+    cache_result = create_cacher()
+
     while True:
         user_input = prompt.string(">>> Введите команду: ").strip()
-
-        # На всякий случай: если вдруг пустая строка (prompt обычно не пропускает)
         if not user_input:
             continue
 
-        # Разбираем команду безопасно (учитывает кавычки)
         try:
             args = shlex.split(user_input)
         except ValueError:
@@ -219,7 +230,7 @@ def run() -> None:
         command = args[0]
         rest = args[1:]
 
-        # Общие команды 
+        # Общие команды
         if command == "exit":
             break
 
@@ -227,41 +238,44 @@ def run() -> None:
             print_help()
             continue
 
-        # Всегда берём актуальные метаданные
+        # Всегда загружаем актуальные метаданные перед операцией
         metadata = load_metadata(META_FILEPATH)
 
         # Управление таблицами
         if command == "create_table":
             if len(rest) < 2:
-                print("Некорректное значение: недостаточно аргументов." 
-                      "Попробуйте снова.")
+                print(
+                    "Некорректное значение: недостаточно аргументов. "
+                    "Попробуйте снова."
+                )
                 continue
 
             table_name = rest[0]
             columns = rest[1:]
-            metadata = create_table(metadata, table_name, columns)
-            save_metadata(META_FILEPATH, metadata)
+            new_metadata = create_table(metadata, table_name, columns)
+            if new_metadata is not None:
+                save_metadata(META_FILEPATH, new_metadata)
             continue
 
         if command == "drop_table":
             if len(rest) != 1:
-                print("Некорректное значение: ожидается имя таблицы." 
-                      "Попробуйте снова.")
+                print("Некорректное значение: ожидается имя таблицы. Попробуйте снова.")
                 continue
 
             table_name = rest[0]
-            metadata = drop_table(metadata, table_name)
-            save_metadata(META_FILEPATH, metadata)
+            new_metadata = drop_table(metadata, table_name)
+            if new_metadata is not None:
+                save_metadata(META_FILEPATH, new_metadata)
             continue
 
         if command == "list_tables":
             if rest:
                 print("Некорректное значение: лишние аргументы. Попробуйте снова.")
                 continue
-
             list_tables(metadata)
             continue
 
+        # INFO
         if command == "info":
             if len(rest) != 1:
                 print("Некорректное значение: ожидается имя таблицы. Попробуйте снова.")
@@ -277,7 +291,7 @@ def run() -> None:
             table_info(metadata, table_name, table_data)
             continue
 
-
+        # INSERT
         if command == "insert":
             if len(rest) < 4 or rest[0] != "into" or rest[2] != "values":
                 print(f"Некорректное значение: {user_input}. Попробуйте снова.")
@@ -289,7 +303,6 @@ def run() -> None:
                 print(f'Ошибка: Таблица "{table_name}" не существует.')
                 continue
 
-            # values часть может быть разбита на несколько токенов, склеим обратно
             values_part = " ".join(rest[3:])
             values = _parse_values_list(values_part)
             if values is None:
@@ -303,10 +316,14 @@ def run() -> None:
 
             new_data, new_id = result
             save_table_data(table_name, new_data)
+
+            # Данные изменились — кэш select надо сбросить
+            cache_result = create_cacher()
+
             print(f'Запись с ID={new_id} успешно добавлена в таблицу "{table_name}".')
             continue
 
-
+        # SELECT
         if command == "select":
             if len(rest) < 2 or rest[0] != "from":
                 print(f"Некорректное значение: {user_input}. Попробуйте снова.")
@@ -320,13 +337,17 @@ def run() -> None:
 
             table_data = load_table_data(table_name)
 
-            # Без where
+            # SELECT без where
             if len(rest) == 2:
-                rows = select(table_data, where_clause=None)
+                cache_key = f"select:{table_name}:all"
+                rows = cache_result(
+                    cache_key,
+                    lambda: select(table_data, where_clause=None),
+                )
                 _print_rows(schema, rows)
                 continue
 
-            # С where
+            # SELECT с where
             if len(rest) >= 3 and rest[2] == "where":
                 assignment = _parse_assignment(rest[3:])
                 if assignment is None:
@@ -344,14 +365,19 @@ def run() -> None:
                     print(f"Некорректное значение: {raw_val}. Попробуйте снова.")
                     continue
 
-                rows = select(table_data, where_clause={col: typed_val})
+                where_clause = {col: typed_val}
+                cache_key = f"select:{table_name}:{col}={typed_val!r}"
+                rows = cache_result(
+                    cache_key,
+                    lambda: select(table_data, where_clause=where_clause),
+                )
                 _print_rows(schema, rows)
                 continue
 
             print(f"Некорректное значение: {user_input}. Попробуйте снова.")
             continue
 
-
+        # UPDATE
         if command == "update":
             if len(rest) < 6 or "set" not in rest or "where" not in rest:
                 print(f"Некорректное значение: {user_input}. Попробуйте снова.")
@@ -370,7 +396,7 @@ def run() -> None:
                 print(f"Некорректное значение: {user_input}. Попробуйте снова.")
                 continue
 
-            if not (set_idx == 1 and where_idx > set_idx):
+            if set_idx != 1 or where_idx <= set_idx:
                 print(f"Некорректное значение: {user_input}. Попробуйте снова.")
                 continue
 
@@ -379,7 +405,6 @@ def run() -> None:
 
             set_assignment = _parse_assignment(set_part)
             where_assignment = _parse_assignment(where_part)
-
             if set_assignment is None or where_assignment is None:
                 print(f"Некорректное значение: {user_input}. Попробуйте снова.")
                 continue
@@ -389,7 +414,6 @@ def run() -> None:
 
             set_type = _get_col_type(schema, set_col)
             where_type = _get_col_type(schema, where_col)
-
             if set_type is None:
                 print(f"Некорректное значение: {set_col}. Попробуйте снова.")
                 continue
@@ -399,7 +423,6 @@ def run() -> None:
 
             set_typed_val = _convert_value(set_raw_val, set_type)
             where_typed_val = _convert_value(where_raw_val, where_type)
-
             if set_typed_val is None:
                 print(f"Некорректное значение: {set_raw_val}. Попробуйте снова.")
                 continue
@@ -408,21 +431,29 @@ def run() -> None:
                 continue
 
             table_data = load_table_data(table_name)
-            new_data, updated_ids = update(
+            result = update(
                 table_data,
                 set_clause={set_col: set_typed_val},
                 where_clause={where_col: where_typed_val},
             )
+            if result is None:
+                continue
 
+            new_data, updated_ids = result
             if not updated_ids:
                 print("Ошибка: Подходящие записи не найдены.")
                 continue
 
             save_table_data(table_name, new_data)
 
+            # Данные изменились — кэш select сбрасываем
+            cache_result = create_cacher()
+
             if len(updated_ids) == 1:
-                print(f'Запись с ID={updated_ids[0]} в таблице "{table_name}"' 
-                      "успешно обновлена.")
+                print(
+                    f'Запись с ID={updated_ids[0]} в таблице "{table_name}" '
+                    "успешно обновлена."
+                )
             else:
                 ids_str = ", ".join(map(str, updated_ids))
                 print(
@@ -431,7 +462,7 @@ def run() -> None:
                 )
             continue
 
-
+        # DELETE
         if command == "delete":
             if len(rest) < 4 or rest[0] != "from" or rest[2] != "where":
                 print(f"Некорректное значение: {user_input}. Попробуйте снова.")
@@ -460,17 +491,25 @@ def run() -> None:
                 continue
 
             table_data = load_table_data(table_name)
-            new_data, deleted_ids = delete(table_data, where_clause={col: typed_val})
+            result = delete(table_data, where_clause={col: typed_val})
+            if result is None:
+                continue
 
+            new_data, deleted_ids = result
             if not deleted_ids:
                 print("Ошибка: Подходящие записи не найдены.")
                 continue
 
             save_table_data(table_name, new_data)
 
+            # Данные изменились — кэш select сбрасываем
+            cache_result = create_cacher()
+
             if len(deleted_ids) == 1:
-                print(f'Запись с ID={deleted_ids[0]} успешно удалена из таблицы' 
-                      '"{table_name}".')
+                print(
+                    f'Запись с ID={deleted_ids[0]} успешно удалена из таблицы '
+                    f'"{table_name}".'
+                )
             else:
                 ids_str = ", ".join(map(str, deleted_ids))
                 print(
@@ -478,4 +517,5 @@ def run() -> None:
                 )
             continue
 
+        # Неизвестная команда
         print(f"Функции {command} нет. Попробуйте снова.")
