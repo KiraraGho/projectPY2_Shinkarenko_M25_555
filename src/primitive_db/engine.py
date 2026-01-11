@@ -7,7 +7,6 @@ import prompt
 from src.primitive_db.core import create_table, drop_table, list_tables
 from src.primitive_db.utils import load_metadata, save_metadata
 
-
 # Файл для хранения метаданных базы данных
 META_FILEPATH = "db_meta.json"
 
@@ -60,7 +59,8 @@ def run() -> None:
         # Создание таблицы
         if command == "create_table":
             if len(params) < 2:
-                print("Некорректное значение: недостаточно аргументов. Попробуйте снова.")
+                print("Некорректное значение: недостаточно аргументов." 
+                      "Попробуйте снова.")
                 continue
 
             table_name = params[0]

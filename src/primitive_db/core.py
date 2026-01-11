@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-
 # Поддерживаемые типы данных столбцов
 SUPPORTED_TYPES = {"int", "str", "bool"}
 
@@ -67,7 +66,8 @@ def create_table(
         # Если ID задан — проверяем, что его тип int
         for col in parsed_columns:
             if col["name"] == "ID" and col["type"] != "int":
-                print("Некорректное значение: ID должен иметь тип int. Попробуйте снова.")
+                print("Некорректное значение: ID должен иметь тип int."
+                      "Попробуйте снова.")
                 return metadata
 
         # Перемещаем ID в начало списка
