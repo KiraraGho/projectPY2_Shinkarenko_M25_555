@@ -65,3 +65,4 @@ poetry run project
 
 ## Демонстрация
 Asciinema-запись с демонстрацией работы проекта:
+https://asciinema.org/a/huoWCDXgvcEOozEc
