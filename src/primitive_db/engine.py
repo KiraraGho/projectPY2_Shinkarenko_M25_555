@@ -115,11 +115,6 @@ def _convert_value(raw: str, expected_type: str) -> object | None:
 
 
 def _parse_values_list(values_part: str) -> list[str] | None:
-    """
-    Парсит часть values(...).
-    Пример: ("Sergei", 28, true)
-    Возвращает список токенов: ['"Sergei"', '28', 'true']
-    """
     s = values_part.strip()
     if not (s.startswith("(") and s.endswith(")")):
         return None
@@ -159,15 +154,24 @@ def _parse_values_list(values_part: str) -> list[str] | None:
 
     return result
 
+def _extract_values_part(user_input: str) -> str | None:
+    """
+    Достаёт подстроку '(<...>)' после ключевого слова values из исходной команды.
+    Это нужно, чтобы shlex не срезал кавычки у строк.
+    """
+    low = user_input.lower()
+    idx = low.find(" values ")
+    if idx == -1:
+        return None
+
+    after = user_input[idx + len(" values ") :].strip()
+    # after должен начинаться с "(...)" и содержать закрывающую скобку
+    if not after.startswith("("):
+        return None
+    return after
+
 
 def _parse_assignment(tokens: list[str]) -> tuple[str, str] | None:
-    """
-    Парсит выражение вида: <col> = <value>
-    Поддерживает варианты:
-      age = 28        -> ["age", "=", "28"]
-      age=28          -> ["age=28"]
-      name="Sergei"   -> ['name="Sergei"']
-    """
     if not tokens:
         return None
 
@@ -303,11 +307,16 @@ def run() -> None:
                 print(f'Ошибка: Таблица "{table_name}" не существует.')
                 continue
 
-            values_part = " ".join(rest[3:])
+            values_part = _extract_values_part(user_input)
+            if values_part is None:
+                print(f"Некорректное значение: {user_input}. Попробуйте снова.")
+                continue
+
             values = _parse_values_list(values_part)
             if values is None:
                 print(f"Некорректное значение: {values_part}. Попробуйте снова.")
                 continue
+
 
             table_data = load_table_data(table_name)
             result = insert(metadata, table_name, table_data, values)
